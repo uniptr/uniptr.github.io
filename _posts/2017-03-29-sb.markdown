@@ -1,0 +1,228 @@
+---
+layout: post
+title:  "C/C++ POSIX IO操作"
+date:   2017-03-29 19:24:15 +0800
+categories: jekyll update
+---
+### 一些 C C++ POSIX 的 IO 操作总结
+- 文件-内存之间
+- 内存-内存之间
+- POSIX 有无缓冲的 IO 操作
+
+
+> 对文件的操作，读文件至内存，从内存写至文件
+
+```c
+// 读文件至内存buf中
+void Fread()
+{
+        char buf[BUFSIZE];
+        size_t flen = 0;
+        FILE *fp = fopen("./foo", "r+");
+        
+        flen = fread(buf, sizeof(char), BUFSIZE, fp); // fp -> buf
+        printf("read len: %lu\n", flen);
+        printf("Fread text:\n%s\n\n", buf);
+        fclose(fp);
+}
+
+// 将内存 buf 中的内容写入打开的文件 fp 中
+void Fwrite()
+{
+        char buf[BUFSIZE] = BUFTEXT;
+        size_t flen = 0;
+        FILE *fp = fopen("./foo", "w+");
+        flen = fwrite(buf, sizeof(char), strlen(buf), fp); // buf -> fp
+        printf("Fwrite write len: %lu\n\n", flen);
+        fclose(fp);
+}
+
+// 将fp 换为 stdin 输入至 buf 中
+void Fscanf()
+{
+        char buf[BUFSIZE];
+        size_t flen = 0;
+        FILE *fp = fopen("./foo", "r+");
+        while(fscanf(fp, "%s", buf) != EOF) // fp -> buf, terminated by blank char
+                printf("Fscanf text:\n%s\n", buf);
+        printf("\n");
+        fclose(fp);
+}
+
+// C++ 文件流，输入至内存中，由于流遇到空格等空白符停止所以需循环将流中的内容全部输入至
+// 内存（string）中，直至返回 EOF  
+void Ifstream()
+{
+        ifstream ifs("./foo");
+        string buf;
+        while (ifs >> buf) // ifs -> buf
+                cout <<"Ifstream: " <<  buf << endl;
+
+        // char *str = new char[100];
+        // ifs.read(str, 10);
+        // whlile (getline(ifs, buf))
+        //      cout << "Ifstream: " << buf << endl;
+        ifs.close();
+        cout << endl;
+}
+
+// fp 换为 stdout， buf 中的内容写入至 fp 中
+void Fprintf()
+{
+        char buf[BUFSIZE] = "ioi ioi";
+        int flen = 0;
+        FILE *fp = fopen("./foo", "w+");
+        flen = fprintf(fp, "%s", buf); // buf -> fp
+        printf("Fprintf len: %d\n", flen);
+        fclose(fp);
+}
+
+void Ofstream()
+{
+        ofstream ofs("./foo", ios::app | ios::out);
+        string buf = "quick,,time go on";
+        // ofs << buf;
+        ofs.write(buf.c_str(), buf.size());
+        ofs.close();
+}
+```
+
+> 字符流的操作，内存至内存
+
+```c
+// 文件流 stdio 换为 str， 格式化输入
+void Sscanf()
+{
+        char str[BUFSIZE] = BUFTEXT;
+        char buf[BUFSIZE];
+        sscanf(str, "%s", buf); // str -> buf
+        printf("Sscanf text:\n%s\n\n", buf);
+}
+
+// istringstream 对象 iss 绑定 buf，作为输入流输入至 word（string） 
+void Istringstream()
+{
+        string buf = "hello world";
+        string word;
+
+        istringstream iss(buf); // buf -> iss
+        while (iss >> word)     // iss -> word, repeatedly
+                cout << "Istringstream: " << word << endl;
+}
+
+// 与 sscanf() 类似, 格式化输出
+void Sprintf()
+{
+        char str[BUFSIZE] = BUFTEXT;
+        char buf[BUFSIZE];
+        sprintf(buf, "%s", str); // str -> buf
+        printf("Sprintf text:\n%s\n\n", buf);
+}
+
+// 与 istringstream 类似
+void Ostringstream()
+{
+        string buf = BUFTEXT;
+        string word;
+
+        ostringstream oss;
+        oss << buf;             // buf -> oss
+        word = oss.str();       // oss -> word
+        cout << "Ostringstream: " << word << endl;
+}
+```
+> Linux 有无缓冲的 IO操作 （参考 UNP）
+
+```c
+// 无缓冲， 普通的 read() write() 并不难保证完成所需要传送的字符数
+ssize_t rio_readn(int fd, void *usrbuf, size_t n)
+{
+        size_t nleft = n;
+        ssize_t nread;
+        char *bufp = usrbuf;
+
+        while (nleft > 0) {
+                if ((nread = read(fd, bufp, nleft)) < 0) {
+                        if (errno == EINTR)     // interrupted by sig handler return
+                                nread = 0;      // call read() again
+                        else
+                                return -1;      // errno set by read()
+                } else if (nread == 0)
+                        break;                  // EOF
+                nleft -= nread;
+                bufp += nread;
+        }
+        
+        return (n - nleft);
+}
+
+// not buff read
+ssize_t rio_writen(int fd, void *usrbuf, size_t n)
+{
+        size_t nleft = n;
+        ssize_t nwritten;
+        char *bufp = usrbuf;
+
+        while(nleft > 0) {
+                if ((nwritten = write(fd, bufp, nleft)) <= 0) {
+                        if (errno == EINTR)
+                                nwritten = n;
+                        else
+                                return -1;
+                }
+                nleft -= nwritten;
+                bufp += nwritten;
+        }
+
+        return n;
+}
+
+// IO 缓冲区结构体
+typedef struct {
+        int rio_fd;
+        int rio_cnt;
+        char *rio_bufptr;
+        char rio_buf[RIO_BUFSIZE];
+} rio_t;
+// 与 read() 语义相同
+// 如果缓冲区为空会通过调用 read() 填满它
+static ssize_t rio_read(rio_t *rp, char *usrbuf, size_t n)
+{
+        int cnt;
+
+        while (rp->rio_cnt <= 0) {      // refill if buf is empty
+                rp->rio_cnt = read(rp->rio_fd, rp->rio_buf, sizeof(rp->rio_buf));
+                if (rp->rio_cnt < 0) {
+                        if (errno != EINTR)
+                                return -1;
+                } else if (rp->rio_cnt == 0) {  // EOF
+                        return 0;
+                } else {
+                        rp->rio_bufptr = rp->rio_buf;   // reset buffer ptr
+                }
+        }
+
+        // copy min(n, rp->cnt) bytes from internal buf to user buf
+        cnt = n;
+        if (rp->rio_cnt < n)
+                cnt = rp->rio_cnt;
+        memmove(usrbuf, rp->rio_bufptr, cnt);
+        rp->rio_bufptr += cnt;
+        rp->rio_cnt -= cnt;
+
+        return cnt;
+}
+```
+### 一点小结
+- 本质是操作对象的变化
+```c
+// C
+printf()  -- stdout     scanf()  -- stdin
+fprintf() -- FILE*      fscanf() -- FILE*
+sprintf() -- char*      sscanf() -- str
+// C++ 与上类似， 都具有缓冲区
+ostream                 istream
+ofstream                ifstream
+ostringstream           istringstream
+```
+- 带有缓冲区的 rio_read() 有时效率很高，因为不必一直在内核-用户态之间切换
